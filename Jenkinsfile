@@ -10,20 +10,32 @@ pipeline {
         
         stage('Install Node.js') {
             steps {
-                // Manual Node.js installation - always works
+                // Method 1: Use nvm (no sudo needed)
                 sh '''
-                # Check if Node.js is already installed
-                if ! command -v node > /dev/null 2>&1; then
-                    echo "Installing Node.js..."
-                    # For Debian/Ubuntu based Jenkins image
-                    apt-get update && apt-get install -y curl
-                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-                    apt-get install -y nodejs
+                # Install Node.js using nvm (no root required)
+                echo "Installing Node.js using nvm..."
+                
+                # Install nvm if not present
+                if [ ! -d "$HOME/.nvm" ]; then
+                    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+                    export NVM_DIR="$HOME/.nvm"
+                    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
                 fi
                 
+                # Load nvm
+                export NVM_DIR="$HOME/.nvm"
+                [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+                
+                # Install Node.js
+                nvm install 20
+                nvm use 20
+                
                 # Verify installation
-                echo "Node.js version: $(node --version)"
-                echo "npm version: $(npm --version)"
+                echo "Node.js version:"
+                node --version
+                echo "npm version:"
+                npm --version
                 '''
             }
         }
