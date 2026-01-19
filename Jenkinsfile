@@ -293,7 +293,7 @@ pipeline {
                 Check logs at: ${env.BUILD_URL}
                 Failed stage: ${env.STAGE_NAME}
                 """,
-                to: 'dev-team@example.com'
+                to: 'ashwin.subramanya@gmail.com'
             )
         }
         
