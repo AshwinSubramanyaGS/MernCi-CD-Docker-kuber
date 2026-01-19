@@ -9,85 +9,93 @@ pipeline {
             }
         }
         
-        stage('Show Project Structure') {
+        stage('Build Docker Images') {
             steps {
                 sh '''
-                echo "============ PROJECT STRUCTURE ============"
-                echo ""
-                echo "📁 ROOT DIRECTORY:"
-                ls -la
-                echo ""
-                echo "📁 BACKEND:"
-                ls -la backend/
-                echo ""
-                echo "📁 FRONTEND:"
-                ls -la frontend/
-                echo ""
-                echo "📁 KUBERNETES:"
-                ls -la k8s/
-                echo ""
-                echo "✅ Project structure validated"
+                echo "🔨 Building Docker images..."
+                
+                # Build backend image
+                cd backend
+                docker build -t task-manager-backend:latest .
+                
+                # Build frontend image
+                cd ../frontend
+                docker build -t task-manager-frontend:latest .
+                
+                echo "✅ Images built successfully:"
+                docker images | grep task-manager
                 '''
             }
         }
         
-        stage('Verify Dockerfiles') {
+        stage('Deploy to Kubernetes') {
             steps {
                 sh '''
-                echo "============ DOCKERFILES ============"
-                echo ""
-                echo "🔧 Backend Dockerfile:"
-                cat backend/Dockerfile
-                echo ""
-                echo "🔧 Frontend Dockerfile:"
-                cat frontend/Dockerfile
-                echo ""
-                echo "✅ Dockerfiles are valid"
+                echo "🚀 Deploying to Kubernetes..."
+                
+                # Create namespace if not exists
+                kubectl create namespace task-manager --dry-run=client -o yaml | kubectl apply -f -
+                
+                # Apply MongoDB
+                kubectl apply -f k8s/mongodb.yaml -n task-manager
+                
+                # Apply backend
+                kubectl apply -f k8s/backend-deployment.yaml -n task-manager
+                kubectl apply -f k8s/backend-service.yaml -n task-manager
+                
+                # Apply frontend
+                kubectl apply -f k8s/frontend.yaml -n task-manager
+                
+                echo "✅ Deployment initiated"
                 '''
             }
         }
         
-        stage('Verify Kubernetes Manifests') {
+        stage('Verify Deployment') {
             steps {
                 sh '''
-                echo "============ KUBERNETES MANIFESTS ============"
-                echo ""
-                echo "🚀 Available K8s files:"
-                for file in k8s/*.yaml; do
-                    echo "📄 $file"
-                    head -5 "$file"
-                    echo ""
-                done
-                echo "✅ Kubernetes manifests are ready"
+                echo "📊 Checking deployment status..."
+                
+                # Wait for pods to start
+                sleep 30
+                
+                echo "=== Pods Status ==="
+                kubectl get pods -n task-manager
+                
+                echo "=== Services ==="
+                kubectl get svc -n task-manager
+                
+                echo "=== Checking backend health ==="
+                # Try to port-forward and test
+                kubectl port-forward svc/backend 5000:5000 -n task-manager --address=0.0.0.0 &
+                sleep 5
+                
+                if curl -f http://localhost:5000/api/v1/health 2>/dev/null; then
+                    echo "✅ Backend is healthy!"
+                else
+                    echo "❌ Backend not responding"
+                    echo "Checking logs..."
+                    kubectl logs -n task-manager deployment/backend --tail=20
+                fi
+                
+                # Kill port-forward
+                pkill -f "kubectl port-forward"
                 '''
             }
         }
         
-        stage('Manual Commands for Deployment') {
+        stage('Access Application') {
             steps {
                 sh '''
-                echo "============ DEPLOYMENT COMMANDS ============"
+                echo "🌐 Application URLs:"
                 echo ""
-                echo "🔨 To build Docker images manually:"
-                echo "1. docker build -t task-manager-backend:latest ./backend"
-                echo "2. docker build -t task-manager-frontend:latest ./frontend"
+                echo "To access frontend:"
+                echo "kubectl port-forward svc/frontend 3000:80 -n task-manager"
+                echo "Then open: http://localhost:3000"
                 echo ""
-                echo "📤 To push to registry:"
-                echo "1. docker tag task-manager-backend:latest localhost:5000/task-manager-backend:latest"
-                echo "2. docker push localhost:5000/task-manager-backend:latest"
-                echo ""
-                echo "🚀 To deploy to Kubernetes:"
-                echo "1. kubectl apply -f k8s/namespace.yaml"
-                echo "2. kubectl apply -f k8s/mongodb-*.yaml"
-                echo "3. kubectl apply -f k8s/backend-*.yaml"
-                echo "4. kubectl apply -f k8s/frontend-*.yaml"
-                echo ""
-                echo "📊 To check deployment:"
-                echo "kubectl get all -n task-manager"
-                echo ""
-                echo "🌐 To access application:"
-                echo "Frontend: http://localhost:3000"
-                echo "Backend API: http://localhost:5000/api/v1/health"
+                echo "To access backend API:"
+                echo "kubectl port-forward svc/backend 5000:5000 -n task-manager"
+                echo "API: http://localhost:5000/api/v1/health"
                 '''
             }
         }
@@ -95,20 +103,21 @@ pipeline {
     
     post {
         always {
-            echo "============ PIPELINE STATUS ============"
-            echo "Result: ${currentBuild.result}"
-            echo "Build Number: ${env.BUILD_NUMBER}"
-            echo "Job Name: ${env.JOB_NAME}"
+            echo "🏁 Pipeline completed: ${currentBuild.result}"
+            
+            sh '''
+            echo "=== Final Status ==="
+            kubectl get all -n task-manager 2>/dev/null || echo "Namespace not found"
+            '''
         }
         
         success {
-            echo '🎉 CI/CD DEMONSTRATION COMPLETE!'
-            echo 'All files validated successfully.'
-            echo 'The pipeline shows the complete CI/CD workflow.'
+            echo '🎉 CI/CD Pipeline Successful!'
+            echo 'Application should be running in Kubernetes'
         }
         
         failure {
-            echo '⚠️ Some checks failed. Review logs above.'
+            echo '⚠️ Pipeline completed with errors'
         }
     }
 }
