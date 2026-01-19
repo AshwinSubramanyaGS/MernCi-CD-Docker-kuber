@@ -54,8 +54,10 @@ pipeline {
                     steps {
                         dir('backend') {
                             sh 'npm install'
-                            sh 'npm run lint || true'  # Continue even if lint fails
-                            sh 'npm test || true'      # Continue even if tests fail
+                            sh 'npm run lint || true'  
+                            # Continue even if lint fails
+                            sh 'npm test || true'
+                            # Continue even if tests fail
                         }
                     }
                 }
