@@ -18,3 +18,10 @@ spec:
         image: task-manager-backend:latest
         ports:
         - containerPort: 5000
+        env:
+        - name: MONGODB_URI
+          value: "mongodb://mongodb:27017/task_manager"
+        - name: JWT_SECRET
+          value: "your-secret-key-here"
+        - name: PORT
+          value: "5000"
