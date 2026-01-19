@@ -1,6 +1,10 @@
 pipeline {
     agent any
     
+    tools {
+        nodejs 'NodeJS-20'  // ADDED: Configure Node.js for Jenkins
+    }
+    
     environment {
         // Docker registry configuration
         DOCKER_REGISTRY = 'localhost:5000'  // For local registry
@@ -18,7 +22,7 @@ pipeline {
         // Build args
         VITE_API_URL = 'http://backend:5000/api/v1'
         
-        // SonarQube (optional) hope this doesnt crash
+        // SonarQube (optional)
         SONAR_HOST_URL = 'http://localhost:9000'
     }
     
@@ -48,16 +52,32 @@ pipeline {
             }
         }
         
+        stage('Verify Tools') {
+            steps {
+                script {
+                    // Verify Node.js/npm are available
+                    sh '''
+                    echo "Node.js version:"
+                    node --version
+                    echo "npm version:"
+                    npm --version
+                    echo "Docker version:"
+                    docker --version
+                    echo "Kubectl version:"
+                    kubectl version --client
+                    '''
+                }
+            }
+        }
+        
         stage('Lint & Test') {
             parallel {
                 stage('Backend Tests') {
                     steps {
                         dir('backend') {
                             sh 'npm install'
-                            sh 'npm run lint || true'  
-                            
-                            sh 'npm test || true'
-                            
+                            sh 'npm run lint || true'  // Continue even if lint fails
+                            sh 'npm test || true'      // Continue even if tests fail
                         }
                     }
                 }
@@ -268,7 +288,8 @@ pipeline {
         success {
             echo 'Pipeline completed successfully!'
             
-            // Send notification
+            // Send notification (comment out if email not configured)
+            /*
             emailext(
                 subject: "✅ Pipeline Success: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
                 body: """Pipeline ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} completed successfully!
@@ -280,12 +301,14 @@ pipeline {
                 """,
                 to: 'ashwin.subramanya@gmail.com'
             )
+            */
         }
         
         failure {
             echo 'Pipeline failed!'
             
-            // Send failure notification
+            // Send failure notification (comment out if email not configured)
+            /*
             emailext(
                 subject: "❌ Pipeline Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
                 body: """Pipeline ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} failed!
@@ -295,6 +318,7 @@ pipeline {
                 """,
                 to: 'ashwin.subramanya@gmail.com'
             )
+            */
         }
         
         unstable {
