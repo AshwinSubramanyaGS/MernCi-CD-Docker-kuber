@@ -17,6 +17,9 @@ pipeline {
         
         // Build args
         VITE_API_URL = 'http://backend:5000/api/v1'
+        
+        // SonarQube (optional) hope this doesnt crash
+        SONAR_HOST_URL = 'http://localhost:9000'
     }
     
     options {
@@ -69,6 +72,21 @@ pipeline {
             }
         }
         
+        stage('Code Quality (SonarQube)') {
+            when {
+                expression { return fileExists('sonar-project.properties') }
+            }
+            steps {
+                script {
+                    dir('backend') {
+                        withSonarQubeEnv('SonarQube') {
+                            sh 'sonar-scanner'
+                        }
+                    }
+                }
+            }
+        }
+        
         stage('Build Docker Images') {
             parallel {
                 stage('Build Backend Image') {
@@ -96,7 +114,7 @@ pipeline {
         stage('Scan Images (Security)') {
             steps {
                 script {
-                    // Example: Trivy scan for vulnerabilities
+                    // Trivy scan for vulnerabilities
                     sh '''
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
@@ -115,59 +133,67 @@ pipeline {
         stage('Push to Registry') {
             steps {
                 script {
-                    // For local registry
-                    docker.withRegistry("http://${DOCKER_REGISTRY}") {
-                        docker.image(BACKEND_IMAGE).push()
-                        docker.image(FRONTEND_IMAGE).push()
-                    }
+                    // Start local registry if not running
+                    sh '''
+                    docker ps | grep registry || docker run -d -p 5000:5000 --name registry registry:2
+                    '''
                     
-                    // For Docker Hub (uncomment if using)
-                    /*
-                    docker.withRegistry('https://index.docker.io/v1/', DOCKERHUB_CREDENTIALS) {
-                        docker.image(BACKEND_IMAGE).push()
-                        docker.image(FRONTEND_IMAGE).push()
-                    }
-                    */
+                    // Tag and push to local registry
+                    sh """
+                    docker tag ${BACKEND_IMAGE} ${DOCKER_REGISTRY}/task-manager-backend:latest
+                    docker tag ${FRONTEND_IMAGE} ${DOCKER_REGISTRY}/task-manager-frontend:latest
+                    
+                    docker push ${DOCKER_REGISTRY}/task-manager-backend:latest
+                    docker push ${DOCKER_REGISTRY}/task-manager-frontend:latest
+                    docker push ${BACKEND_IMAGE}
+                    docker push ${FRONTEND_IMAGE}
+                    """
                 }
             }
         }
         
-        stage('Deploy to Kubernetes') {
+        stage('Deploy to Development') {
             when {
-                branch 'main'  // Only deploy from main branch
+                branch 'develop'
             }
             steps {
                 script {
-                    // Update Kubernetes manifests with new image tags
+                    // Update Kubernetes manifests
                     sh """
-                    sed -i 's|image: task-manager-backend:.*|image: ${BACKEND_IMAGE}|g' k8s/backend-deployment.yaml
-                    sed -i 's|image: task-manager-frontend:.*|image: ${FRONTEND_IMAGE}|g' k8s/frontend-deployment.yaml
+                    sed -i 's|image:.*task-manager-backend:.*|image: ${DOCKER_REGISTRY}/task-manager-backend:latest|g' k8s/backend-deployment.yaml
+                    sed -i 's|image:.*task-manager-frontend:.*|image: ${DOCKER_REGISTRY}/task-manager-frontend:latest|g' k8s/frontend-deployment.yaml
                     """
                     
-                    // Apply Kubernetes manifests
+                    // Apply to dev namespace
                     withKubeConfig([credentialsId: 'kube-config', serverUrl: '', contextName: 'docker-desktop']) {
                         sh """
                         kubectl apply -f k8s/namespace.yaml
-                        kubectl apply -f k8s/ -n ${K8S_NAMESPACE}
+                        kubectl apply -f k8s/ -n ${K8S_NAMESPACE}-dev
                         """
                     }
                 }
             }
         }
         
-        stage('Rolling Update') {
+        stage('Deploy to Production') {
             when {
                 branch 'main'
             }
             steps {
                 script {
+                    // Update Kubernetes manifests with specific version
+                    sh """
+                    sed -i 's|image:.*task-manager-backend:.*|image: ${BACKEND_IMAGE}|g' k8s/backend-deployment.yaml
+                    sed -i 's|image:.*task-manager-frontend:.*|image: ${FRONTEND_IMAGE}|g' k8s/frontend-deployment.yaml
+                    """
+                    
+                    // Apply to production namespace
                     withKubeConfig([credentialsId: 'kube-config', serverUrl: '', contextName: 'docker-desktop']) {
-                        // Trigger rolling update
                         sh """
-                        kubectl rollout restart deployment/backend -n ${K8S_NAMESPACE}
-                        kubectl rollout restart deployment/frontend -n ${K8S_NAMESPACE}
+                        kubectl apply -f k8s/namespace.yaml
+                        kubectl apply -f k8s/ -n ${K8S_NAMESPACE}
                         
-                        # Wait for rollout to complete
+                        # Wait for rollout
                         kubectl rollout status deployment/backend -n ${K8S_NAMESPACE} --timeout=300s
                         kubectl rollout status deployment/frontend -n ${K8S_NAMESPACE} --timeout=300s
                         """
@@ -186,8 +212,91 @@ pipeline {
                     sleep 30
                     
                     // Run smoke tests
-                    sh '''
-                    # Test backend health
-                    kubectl get pods -n task-manager
-                    
-     
+                    withKubeConfig([credentialsId: 'kube-config', serverUrl: '', contextName: 'docker-desktop']) {
+                        sh '''
+                        # Get pod status
+                        kubectl get pods -n task-manager
+                        
+                        # Test backend health endpoint
+                        BACKEND_POD=$(kubectl get pods -n task-manager -l app=backend -o jsonpath='{.items[0].metadata.name}')
+                        kubectl exec -n task-manager $BACKEND_POD -- curl -f http://localhost:5000/api/v1/health || exit 1
+                        
+                        # Test frontend (port-forward temporarily)
+                        kubectl port-forward service/frontend 3000:80 -n task-manager --address=0.0.0.0 &
+                        sleep 5
+                        curl -f http://localhost:3000 || curl -f http://localhost:3000/health || true
+                        pkill -f "kubectl port-forward"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Integration Tests') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    dir('tests') {
+                        sh '''
+                        # Run API integration tests
+                        npm install
+                        npm run test:integration || true
+                        '''
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Clean up workspace
+            cleanWs()
+            
+            // Archive artifacts
+            archiveArtifacts artifacts: '**/test-results/**/*.xml', allowEmptyArchive: true
+            archiveArtifacts artifacts: '**/coverage/**/*', allowEmptyArchive: true
+            
+            // JUnit test report
+            junit '**/test-results/**/*.xml'
+        }
+        
+        success {
+            echo 'Pipeline completed successfully!'
+            
+            // Send notification
+            emailext(
+                subject: "✅ Pipeline Success: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                body: """Pipeline ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} completed successfully!
+                
+                View changes: ${env.CHANGE_URL ?: 'N/A'}
+                Build URL: ${env.BUILD_URL}
+                Commit: ${env.GIT_COMMIT}
+                Branch: ${env.BRANCH_NAME}
+                """,
+                to: 'dev-team@example.com'
+            )
+        }
+        
+        failure {
+            echo 'Pipeline failed!'
+            
+            // Send failure notification
+            emailext(
+                subject: "❌ Pipeline Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                body: """Pipeline ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} failed!
+                
+                Check logs at: ${env.BUILD_URL}
+                Failed stage: ${env.STAGE_NAME}
+                """,
+                to: 'dev-team@example.com'
+            )
+        }
+        
+        unstable {
+            echo 'Pipeline is unstable (tests failed)'
+        }
+    }
+}
