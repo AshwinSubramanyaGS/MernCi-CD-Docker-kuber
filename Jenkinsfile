@@ -278,7 +278,7 @@ pipeline {
                 Commit: ${env.GIT_COMMIT}
                 Branch: ${env.BRANCH_NAME}
                 """,
-                to: 'dev-team@example.com'
+                to: 'ashwin.subramanya@gmail.com'
             )
         }
         
