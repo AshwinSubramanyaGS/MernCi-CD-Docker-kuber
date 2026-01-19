@@ -1,5 +1,25 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yaml '''
+            apiVersion: v1
+            kind: Pod
+            spec:
+              containers:
+              - name: docker
+                image: docker:24-cli
+                command: ['cat']
+                tty: true
+                volumeMounts:
+                - mountPath: /var/run/docker.sock
+                  name: docker-sock
+              volumes:
+              - name: docker-sock
+                hostPath:
+                  path: /var/run/docker.sock
+            '''
+        }
+    }
     
     stages {
         stage('Checkout') {
@@ -8,37 +28,21 @@ pipeline {
             }
         }
         
-        stage('Build Backend') {
+        stage('Build') {
             steps {
-                dir('backend') {
-                    // Direct Docker build - no npm install needed
-                    sh 'docker build -t task-manager-backend:latest .'
-                }
-            }
-        }
-        
-        stage('Build Frontend') {
-            steps {
-                dir('frontend') {
-                    // Direct Docker build - no npm install needed
-                    sh 'docker build -t task-manager-frontend:latest .'
+                container('docker') {
+                    sh '''
+                    docker build -t task-manager-backend:latest ./backend
+                    docker build -t task-manager-frontend:latest ./frontend
+                    '''
                 }
             }
         }
         
         stage('Deploy') {
             steps {
-                sh '''
-                echo "Applying Kubernetes manifests..."
-                kubectl apply -f k8s/ 2>/dev/null || echo "Manifests applied"
-                '''
+                sh 'kubectl apply -f k8s/ || true'
             }
-        }
-    }
-    
-    post {
-        always {
-            echo "Build completed: ${currentBuild.result}"
         }
     }
 }
